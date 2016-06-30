@@ -80,7 +80,7 @@ class drLog {
     // The exit status message is set to $message.
     public static function logAndExit($message, $level, $condition=TRUE) {
         if (self::log($message, $level, $condition)) {
-            exit($message);
+            exit($message . "\n");
         }
     }
 

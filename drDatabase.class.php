@@ -87,6 +87,9 @@ class drDatabase {
             }
         }
 
+        if (!$bReturn) {
+            drLog::log($sql, drLog::DEBUG);
+        }
         return $bReturn;
     }
 
@@ -98,46 +101,86 @@ class drDatabase {
         return $this->query($sql);
     }
 
-    // ------------
-    // Create table
-    // ------------
-    function createTable($tableName, $columns) {
+    // -----------------------------
+    // SQL for query to CREATE TABLE
+    // -----------------------------
+    public function getCreateTableSQL($table) {
 
-        $default = "TEXT COLLATE utf8_general_ci";
+        $sql = "CREATE TABLE " . $table->getName() . " (";
+        $prefix = "";
 
-        $sql = "CREATE TABLE " . $tableName . " ( ";
-        foreach($columns as $k) {
-            $name = NULL;
-            $datatype = NULL;
-            $attributes = NULL;
+        foreach ($table->getColumns() as $c) {
+            $sql .= $prefix . $c->getSQL();
+            $prefix = ", ";
+        }
+        $sql .= ");";
 
-            if (is_array($k)) {
-                if (array_key_exists("name", $k)) {
-                    $name = $k["name"];
-                    if (array_key_exists("datatype", $k))
-                        $datatype = $k["datatype"];
-                    if (array_key_exists("datalength", $k) and !is_null($datatype))
-                        $datatype .= "(" . $k["datalength"] . ")";
-                    if (array_key_exists("attributes", $k))
-                        $attributes = $k["attributes"];
+        return $sql;
+    }
+
+    // ------------------------------------------
+    // SQL for query to INSERT INTO * VALUES rows
+    // ------------------------------------------
+    public function getInsertIntoValuesSQL($table) {
+
+        $columns = $table->getColumns();
+        $rows = $table->getRows();
+
+        $sql = "INSERT INTO " . $table->getName() . " VALUES ";
+        $row_prefix = "";
+
+        foreach ($rows as $row) {
+
+            $sql .=  $row_prefix . "(";
+            $row_prefix = ", ";
+            $entry_prefix = "";
+            $index = 0;
+
+            foreach ($columns as $column) {
+            
+                // If the array is associative and has this column name as a key, use the 
+                // associated value
+                if (isset($row[$column->getName()])) {
+                    $entry = $row[$column->getName()];
+
+                // Otherwise, assume row is a sequential array with the same order as the
+                // the columns are stored in the table and take the value from the current
+                // index location.
                 } else {
-                    echo "Create table failed: missing column name.\n";
-                    print_r($k);
-                    echo "\n";
-                    return FALSE;
+                    $entry = $row[$index++];
+                }
+                
+
+                if (is_null($entry)) {
+                    $sql .= $entry_prefix . "''";
+            
+                } else if (is_numeric($entry)) {
+                    $sql .= $entry_prefix . $entry;
+            
+                } else {
+
+                    if ($column->getDatatype() == "TIME") {
+                        $sql .= $entry_prefix . "TIME( STR_TO_DATE( '" . $entry . "', '%h:%i %p' ) )";
+                    } else {
+                        $sql .= $entry_prefix . "'" . mysqli_real_escape_string($this->m_connection, $entry) . "'";
+                    }
                 }
 
-                $sql .= $name . " " . $datatype . " " . $attributes . ", ";
-
-            } else {
-                $sql .= $k . " " . $default . ", ";
+                $entry_prefix = ", ";
             }
-        }     
-        $sql = rtrim($sql, " ,");
-        $sql .= " );";  
 
-        return $this->query($sql);
+            $sql .= ")";
+        }
+
+        $sql .= ";";
+
+        return $sql;
     }
+
+
+
+
+
 
     // ------------------------
     // Insert values into table

@@ -11,7 +11,7 @@ spl_autoload_register(function ($class_name) {
 // ----
 
 // Import the configuration
-$config = include("config.php");
+$config = include("config.inc.php");
 
 // Set the timezone
 date_default_timezone_set($config["timezone"]);

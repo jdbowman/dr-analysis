@@ -9,6 +9,7 @@ class drSurveyMonkey {
     private $m_api_key;
     private $m_auth_token;
     private $m_surveys_url;
+    private $m_translate_dictionary;
 
 
     // ------------------------
@@ -21,12 +22,27 @@ class drSurveyMonkey {
         $this->m_api_key = $config["sm_api_key"];
         $this->m_auth_token = $config["sm_auth_token"];
         $this->m_surveys_url = $config["sm_surveys_url"];
+        $this->m_translate_dictionary = NULL;
     }
 
 
     // ---------------------------
     // Helper functions
     // ---------------------------
+
+    public function setTranslateDictionary($dictionary) {
+        $this->m_translate_dictionary = $dictionary;
+    }
+
+    protected function translate($original) {
+        if (!is_null($this->m_translate_dictionary)) {
+            if (isset($this->m_translate_dictionary[$original])) {
+                return $this->m_translate_dictionary[$original];
+            }
+        }
+
+        return $original;
+    }
 
     protected function getAuthContext() {
        return( stream_context_create( array( 'http' => array( 'header' => "Authorization:bearer " . $this->m_auth_token ) ) ) );
@@ -56,9 +72,11 @@ class drSurveyMonkey {
 
     protected function getShortName($question_id, $element_id) {
         if (is_null($element_id))
-            return "col_" . $question_id;
+            $short = "col_" . $question_id;
         else
-            return "col_" . $question_id . "_" . $element_id;
+            $short = "col_" . $question_id . "_" . $element_id;
+
+        return $this->translate($short);
     }
 
     protected function getLongName($question_text, $element_text) {
@@ -68,36 +86,40 @@ class drSurveyMonkey {
             return $question_text . " | " . $element_text; 
     }
 
-    protected function addElement(&$elements, $question_id, $question_family, $element_id, $element_text, $element_category, $element_position) {
-        array_push($elements, ["question_id"=>$question_id, "question_family"=>$question_family, "element_id"=>$element_id, "element_text"=>$element_text, "element_category"=>$element_category, "element_position"=>$element_position, "response_column"=>$this->getShortName($question_id, $element_id)]);
+    protected function addElementRow(&$table, $question_id, $question_family, $element_id, $element_text, $element_category, $element_position) {
+
+        $table->addRow( [
+            "question_id"=>$question_id, 
+            "question_family"=>$question_family, 
+            "element_id"=>$element_id, 
+            "element_text"=>$element_text, 
+            "element_category"=>$element_category, 
+            "element_position"=>$element_position, 
+            "response_column"=>$this->getShortName($question_id, $element_id) ] );
     }
 
-    protected function addColumn(&$columns, $question_id, $question_text, $question_family, $element_id, $element_text) {
-        $datatype = "TEXT";
+    protected function addResponseColumn(&$table, $question_id, $question_text, $question_family, $element_id, $element_text) {
+
+        $column = new drTableColumn();
+        $column->setName($this->getShortName($question_id, $element_id));
+        $column->setDescription($this->getLongName($question_text, $element_text));
+
         if ($question_family=="datetime") {
-            $datatype = "TIME";
+            $column->setDatatype("TIME");
         }
-
-        array_push($columns, ["name"=>$this->getShortName($question_id, $element_id), "long"=>$this->getLongName($question_text, $element_text), "datatype"=>$datatype]);
+        
+        $table->addColumn($column);
     }
 
-    protected function insertEntry(&$row, $columns, $key, $value) {
-        $index = array_search($key, $columns);
-        if ($index === FALSE)
-            echo "FALSE INDEX: " . $key . ", " . $value . "\n";
-        else
-            $row[$index] = $value;
-
-        return $index;
+    protected function insertEntry(&$row, $key, $value) {
+        $row[$key] = $this->translate($value);
+        return TRUE;
     }
-
 
 
     // ---------------------------
     // Public functions
     // ---------------------------
-
-
 
     // ---------------------------------------
     // Fetch list of surveys from SurveyMonkey
@@ -155,12 +177,20 @@ class drSurveyMonkey {
     // -------------------
     function parseSurveyDetail($data) {
        
-        $columns = [];
-        $elements = [];
+        // Allocate table definitions for responses and elements
+        $responses_table = new drTable();
+        $elements_table = new drTable();
+        $elements_table->addColumn(new drTableColumn("question_id"));
+        $elements_table->addColumn(new drTableColumn("question_family"));
+        $elements_table->addColumn(new drTableColumn("element_id"));
+        $elements_table->addColumn(new drTableColumn("element_text"));
+        $elements_table->addColumn(new drTableColumn("element_category"));
+        $elements_table->addColumn(new drTableColumn("element_position"));
+        $elements_table->addColumn(new drTableColumn("response_column"));
 
-        // Add standard columns
-        $this->addColumn($columns, "id", "Response id", NULL, NULL, NULL);
-        $this->addColumn($columns, "response_status", "Response status", NULL, NULL, NULL);
+        // Add standard columns to response table definition
+        $this->addResponseColumn($responses_table, "response_id", "Response ID", NULL, NULL, NULL);
+        $this->addResponseColumn($responses_table, "response_status", "Response status", NULL, NULL, NULL);
 
         // Loop over survey detail page to generate columns and labels
         foreach ($data["pages"] as $p) {
@@ -173,7 +203,7 @@ class drSurveyMonkey {
                 $question_text = strip_tags($q["headings"][0]["heading"]);
                 $question_family = strip_tags($q["family"]);
 
-                $this->addElement($elements, $question_id, $question_family, NULL, $question_text, "questions", NULL);
+                $this->addElementRow($elements_table, $question_id, $question_family, NULL, $question_text, "questions", NULL);
 
                 if (array_key_exists("answers", $q)) {
                 
@@ -192,8 +222,8 @@ class drSurveyMonkey {
                             $element_position = strip_tags($answers["position"]);
 
                             // Add to column and label lists
-                            $this->addColumn($columns, $question_id, $question_text, $question_family, NULL, NULL);
-                            $this->addElement($elements, $question_id, $question_family, $element_id, $element_text, "answers", $element_position);
+                            $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, NULL, NULL);
+                            $this->addElementRow($elements_table, $question_id, $question_family, $element_id, $element_text, "answers", $element_position);
                         } 
 
                         // Add sub-elements of questions
@@ -221,8 +251,8 @@ class drSurveyMonkey {
                                         $element_position = strip_tags($r["position"]);
 
                                         // Add to column and label lists
-                                        $this->addColumn($columns, $question_id, $question_text, $question_family, $element_id, $element_text);
-                                        $this->addElement($elements, $question_id, $question_family, $element_id, $element_text, $s, $element_position);              
+                                        $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, $element_id, $element_text);
+                                        $this->addElementRow($elements_table, $question_id, $question_family, $element_id, $element_text, $s, $element_position);              
                                     } 
 
                                 } else {
@@ -233,8 +263,8 @@ class drSurveyMonkey {
                                     $element_position = strip_tags($r["position"]);
 
                                     // Add to column and label lists
-                                    $this->addColumn($columns, $question_id, $question_text, $question_family, $element_id, $element_text);
-                                    $this->addElement($elements, $question_id, $question_family, $element_id, $element_text, $s, $element_position);              
+                                    $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, $element_id, $element_text);
+                                    $this->addElementRow($elements_table, $question_id, $question_family, $element_id, $element_text, $s, $element_position);              
                                 }
                             } 
                         }          
@@ -252,7 +282,7 @@ class drSurveyMonkey {
                                 $element_position = strip_tags($c["position"]);
 
                                 // Add to label list only
-                                $this->addElement($elements, $question_id, $question_family, $element_id, $element_text, "choices", $element_position);
+                                $this->addElementRow($elements_table, $question_id, $question_family, $element_id, $element_text, "choices", $element_position);
                             }
                         }
 
@@ -260,33 +290,33 @@ class drSurveyMonkey {
                         if (!$bool_subs_total or ($bool_choices and !$bool_subs["rows"])) {
 
                             // Add question to columns list (already in labels)
-                            $this->addColumn($columns, $question_id, $question_text, $question_family, NULL, NULL);
+                            $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, NULL, NULL);
                         }
 
                     // Answers is not an array - the question has no sub-elements
                     } else {
 
                         // Add question to columns list (already in labels)
-                        $this->addColumn($columns, $question_id, $question_text, $question_family, NULL, NULL);
+                        $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, NULL, NULL);
                     }
 
                 // Answers does not exist - the question has no sub-elements
                 } else {
 
                     // Add question to columns list (already in labels)
-                    $this->addColumn($columns, $question_id, $question_text, $question_family, NULL, NULL);
+                    $this->addResponseColumn($responses_table, $question_id, $question_text, $question_family, NULL, NULL);
                 }
             }
         }
 
-        return ["columns"=>$columns, "elements"=>$elements];
+        return ["responses_table"=>$responses_table, "elements_table"=>$elements_table];
     }
         
 
     // ----------------------
     // Parse survey resopnses
     // ----------------------
-    function parseSurveyResponses($data, $columns, &$responses)
+    function parseSurveyResponses($data, &$responses)
     {
         // See if there are more pages to process after the current one
         $next_url = NULL;
@@ -317,11 +347,11 @@ class drSurveyMonkey {
             } else {
 
                 // Create a new empty row
-                $row = array_fill(0, count($columns), NULL);
+                $row = [];
 
                 // Store the response id and status
-                $this->insertEntry($row, $columns, $this->getShortName("id", NULL), $response_id);
-                $this->insertEntry($row, $columns, $this->getShortName("response_status", NULL), $response_status);
+                $this->insertEntry($row, $this->getShortName("response_id", NULL), $response_id);
+                $this->insertEntry($row, $this->getShortName("response_status", NULL), $response_status);
 
                 // Loop over all questions recorded in the response and add them to the row
                 foreach ($d["pages"] as $p) {
@@ -352,11 +382,7 @@ class drSurveyMonkey {
                             }
 
                             // Insert entry into row
-                            $out = $this->insertEntry($row, $columns, $this->getShortName($question_id, $element_id), $element_value);
-                            if ($out===FALSE) {
-                                echo "Element: " . $element_id . " " . $element_value . "\n";
-                                print_r($q);
-                            }
+                            $out = $this->insertEntry($row, $this->getShortName($question_id, $element_id), $element_value);
                         }
                     }
                 }
